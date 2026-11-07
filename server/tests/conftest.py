@@ -106,7 +106,7 @@ def devctl(tmp_path: Path) -> DevctlHarness:
 
 
 @pytest.fixture
-def config(tmp_path: Path):
+def config(tmp_path: Path, postgres_database_url: str):
     env = tmp_path / ".env"
     env.write_text(
         "BACKEND_HOST=127.0.0.1\n"
@@ -116,6 +116,7 @@ def config(tmp_path: Path):
         "CELERY_BROKER_URL=filesystem://\n"
         "CELERY_BROKER_DIR=.runtime/celery-queue\n"
         "CELERY_RESULT_DB_PATH=results.db\n"
+        f"DATABASE_URL={postgres_database_url}\n"
         "DEBUG=true\n"
     )
     return load_config(env)
@@ -129,7 +130,9 @@ def dispatch_calls() -> List[Tuple[str, str]]:
 @pytest.fixture
 def app(config, dispatch_calls):
     dispatch: Callable[[str, str], None] = lambda task_id, message: dispatch_calls.append((task_id, message))
-    return create_app(config, dispatch)
+    application = create_app(config, dispatch)
+    initialize_postgres_schema(application.state.db_engine)
+    return application
 
 
 @pytest.fixture

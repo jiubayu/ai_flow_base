@@ -8,7 +8,7 @@ from src.application.bootstrap.errors import TaskNotFoundError
 from src.core.config import Config
 from src.domain.bootstrap.entities import DemoTask
 from src.domain.bootstrap.value_objects import TaskState
-from src.infrastructure.persistence.result_store import ResultStore
+from src.infrastructure.persistence.result_store import PostgresDemoTaskResultStore
 
 
 def utcnow() -> datetime:
@@ -22,7 +22,7 @@ def validate_startup(config: Config) -> Config:
 
 
 class DemoTaskUseCase:
-    def __init__(self, store: ResultStore, dispatch: Callable[[str, str], None] | None = None) -> None:
+    def __init__(self, store: PostgresDemoTaskResultStore, dispatch: Callable[[str, str], None] | None = None) -> None:
         self.store = store
         self.dispatch = dispatch
 

@@ -21,7 +21,8 @@ from src.infrastructure.clock import SystemClock
 from src.infrastructure.logging.file_logger import FileLogger
 from src.infrastructure.persistence.auth_migrations import run_migrations as run_auth_migrations
 from src.infrastructure.persistence.auth_repository import SqlAuthRepository
-from src.infrastructure.persistence.result_store import ResultStore
+from src.infrastructure.persistence.database import create_database_engine, create_session_factory
+from src.infrastructure.persistence.result_store import PostgresDemoTaskResultStore
 from src.infrastructure.persistence.workspace_repository import SqlWorkspaceRepository
 from src.presentation.api import auth, dev_tasks, health, workspace
 
@@ -90,7 +91,12 @@ def create_app(
 
     app = FastAPI(title="Bootstrap Development API")
     app.state.config = config
-    app.state.result_store = ResultStore(config.celery_result_db_path)
+
+    engine = create_database_engine(config)
+    session_factory = create_session_factory(engine)
+    app.state.db_engine = engine
+    app.state.db_session_factory = session_factory
+    app.state.result_store = PostgresDemoTaskResultStore(session_factory)
     app.state.dispatch = dispatch or default_dispatch
 
     logger = configure_logging(FileLogger(config.log_dir / "backend.log"), "backend", config.debug)

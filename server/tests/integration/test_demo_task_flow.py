@@ -1,10 +1,10 @@
 from src.application.bootstrap.use_cases import DemoTaskUseCase
 from src.domain.bootstrap.value_objects import TaskState
-from src.infrastructure.persistence.result_store import ResultStore
+from src.infrastructure.persistence.result_store import PostgresDemoTaskResultStore
 
 
-def test_backend_to_celery_demo_task_flow(config):
-    store = ResultStore(config.celery_result_db_path)
+def test_backend_to_celery_demo_task_flow(postgres_session_factory):
+    store = PostgresDemoTaskResultStore(postgres_session_factory)
     use_case = DemoTaskUseCase(store)
 
     def fake_worker(task_id: str, message: str) -> None:
@@ -21,8 +21,8 @@ def test_backend_to_celery_demo_task_flow(config):
     assert processed.finished_at is not None
 
 
-def test_demo_task_flow_failure_records_error(config):
-    store = ResultStore(config.celery_result_db_path)
+def test_demo_task_flow_failure_records_error(postgres_session_factory):
+    store = PostgresDemoTaskResultStore(postgres_session_factory)
     use_case = DemoTaskUseCase(store)
     accepted = use_case.submit("boom")
     task = use_case.get(accepted.task_id)

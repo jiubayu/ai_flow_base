@@ -1,64 +1,54 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-from sqlalchemy import Column, DateTime, String, Text, create_engine
-from sqlalchemy.orm import DeclarativeBase, Session
+from sqlalchemy import select
 
 from src.domain.bootstrap.entities import DemoTask
 from src.domain.bootstrap.value_objects import TaskState
+from src.infrastructure.persistence.database import SessionFactory
+from src.infrastructure.persistence.models import DemoTaskModel
 
 
-class Base(DeclarativeBase):
-    pass
-
-
-class DemoTaskRecord(Base):
-    __tablename__ = "demo_tasks"
-
-    task_id = Column(String, primary_key=True)
-    message = Column(Text, nullable=False)
-    submitted_at = Column(DateTime, nullable=False)
-    started_at = Column(DateTime)
-    finished_at = Column(DateTime)
-    state = Column(String, nullable=False)
-    result_message = Column(Text)
-    error_message = Column(Text)
-
-
-class ResultStore:
-    def __init__(self, db_path: Path) -> None:
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.engine = create_engine(f"sqlite:///{db_path}", future=True)
-        Base.metadata.create_all(self.engine)
+class PostgresDemoTaskResultStore:
+    def __init__(self, session_factory: SessionFactory) -> None:
+        self._session_factory = session_factory
 
     def save(self, task: DemoTask) -> None:
-        with Session(self.engine) as session:
-            record = session.get(DemoTaskRecord, task.task_id)
-            if record is None:
-                record = DemoTaskRecord(task_id=task.task_id)
-            record.message = task.message
-            record.submitted_at = task.submitted_at
-            record.started_at = task.started_at
-            record.finished_at = task.finished_at
-            record.state = task.state.value
-            record.result_message = task.result_message
-            record.error_message = task.error_message
-            session.add(record)
-            session.commit()
+        with self._session_factory.begin() as session:
+            row = session.get(DemoTaskModel, task.task_id)
+            if row is None:
+                session.add(
+                    DemoTaskModel(
+                        task_id=task.task_id,
+                        message=task.message,
+                        submitted_at=task.submitted_at,
+                        started_at=task.started_at,
+                        finished_at=task.finished_at,
+                        state=task.state.value,
+                        result_message=task.result_message,
+                        error_message=task.error_message,
+                    )
+                )
+            else:
+                row.message = task.message
+                row.submitted_at = task.submitted_at
+                row.started_at = task.started_at
+                row.finished_at = task.finished_at
+                row.state = task.state.value
+                row.result_message = task.result_message
+                row.error_message = task.error_message
 
     def get(self, task_id: str) -> DemoTask | None:
-        with Session(self.engine) as session:
-            record = session.get(DemoTaskRecord, task_id)
-            if record is None:
-                return None
-            return DemoTask(
-                task_id=record.task_id,
-                message=record.message,
-                submitted_at=record.submitted_at,
-                state=TaskState(record.state),
-                started_at=record.started_at,
-                finished_at=record.finished_at,
-                result_message=record.result_message,
-                error_message=record.error_message,
-            )
+        with self._session_factory() as session:
+            row = session.scalar(select(DemoTaskModel).where(DemoTaskModel.task_id == task_id))
+        if row is None:
+            return None
+        return DemoTask(
+            task_id=row.task_id,
+            message=row.message,
+            submitted_at=row.submitted_at,
+            state=TaskState(row.state),
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            result_message=row.result_message,
+            error_message=row.error_message,
+        )

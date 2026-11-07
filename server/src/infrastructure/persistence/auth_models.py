@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from sqlalchemy import Column, Index, Integer, String, Text
+from sqlalchemy.orm import DeclarativeBase
 
-from src.infrastructure.persistence.result_store import Base
+
+class Base(DeclarativeBase):
+    pass
 
 
 class UserAccountRecord(Base):

@@ -1,0 +1,179 @@
+openapi: 3.1.0
+info:
+  title: Bootstrap Development API
+  version: 0.1.0
+  description: >
+    本地工程骨架使用的最小开发接口，覆盖后端健康检查、Celery 示例任务提交与状态查询。
+servers:
+  - url: http://127.0.0.1:8000
+paths:
+  /api/health:
+    get:
+      summary: 查询后端健康状态
+      operationId: getHealth
+      responses:
+        "200":
+          description: 后端可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/dev/tasks/demo:
+    post:
+      summary: 提交最小示例任务
+      operationId: submitDemoTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DemoTaskRequest"
+      responses:
+        "202":
+          description: 任务已接收
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoTaskAcceptedResponse"
+        "422":
+          description: 请求无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+  /api/dev/tasks/{task_id}:
+    get:
+      summary: 查询示例任务状态
+      operationId: getDemoTaskStatus
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 返回当前任务状态
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DemoTaskStatusResponse"
+        "404":
+          description: 任务不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskNotFoundResponse"
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - service
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        service:
+          type: string
+          enum: [backend]
+        timestamp:
+          type: string
+          format: date-time
+        debug:
+          type: boolean
+    DemoTaskRequest:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 120
+    DemoTaskAcceptedResponse:
+      type: object
+      required:
+        - task_id
+        - state
+        - message
+      properties:
+        task_id:
+          type: string
+        state:
+          type: string
+          enum: [PENDING]
+        message:
+          type: string
+    DemoTaskStatusResponse:
+      type: object
+      required:
+        - task_id
+        - state
+      properties:
+        task_id:
+          type: string
+        state:
+          type: string
+          enum: [PENDING, STARTED, SUCCESS, FAILURE]
+        result_message:
+          type:
+            - string
+            - "null"
+        error_message:
+          type:
+            - string
+            - "null"
+        started_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+        finished_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    TaskNotFoundResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          $ref: "#/components/schemas/ErrorResponse"
+    ValidationErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            required:
+              - loc
+              - msg
+              - type
+            properties:
+              loc:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+              msg:
+                type: string
+              type:
+                type: string

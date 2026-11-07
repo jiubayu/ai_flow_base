@@ -1,0 +1,327 @@
+openapi: 3.1.0
+info:
+  title: Email Password Auth API
+  version: 0.1.0
+  description: >
+    邮箱验证码与密码认证接口，覆盖验证码发送、注册、登录、当前会话查询、会话刷新与当前浏览器登出。
+servers:
+  - url: http://127.0.0.1:8000
+paths:
+  /api/auth/email-code:
+    post:
+      summary: 发送注册验证码
+      operationId: sendRegisterEmailCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendEmailCodeRequest"
+      responses:
+        "202":
+          description: 验证码已发送或已接受发送请求
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailCodeAcceptedResponse"
+        "409":
+          description: 邮箱已注册或当前不允许进入注册流程
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "429":
+          description: 触发发送频率限制
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitErrorEnvelope"
+        "422":
+          description: 请求参数无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "503":
+          description: 邮件发送链路不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/auth/register:
+    post:
+      summary: 使用邮箱验证码和密码完成注册
+      operationId: registerWithEmailCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: 注册成功并建立当前浏览器会话
+          headers:
+            Set-Cookie:
+              description: >
+                返回 access 会话与 refresh 资格 Cookie；二者都必须为 HttpOnly，供浏览器后续自动携带。
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSessionResponse"
+        "400":
+          description: 验证码失效、密码规则不满足或注册条件不成立
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: 邮箱已注册
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: 请求参数无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+  /api/auth/login:
+    post:
+      summary: 使用邮箱和密码登录
+      operationId: loginWithPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: 登录成功并建立当前浏览器会话
+          headers:
+            Set-Cookie:
+              description: 返回新的 access 会话与 refresh 资格 Cookie
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSessionResponse"
+        "401":
+          description: 邮箱不存在、未验证或密码错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: 请求参数无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+  /api/auth/session:
+    get:
+      summary: 查询当前浏览器会话
+      operationId: getCurrentAuthSession
+      responses:
+        "200":
+          description: 当前浏览器存在有效会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSessionResponse"
+        "401":
+          description: 当前浏览器没有有效会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/auth/refresh:
+    post:
+      summary: 使用当前浏览器的刷新资格轮换并恢复会话
+      operationId: refreshCurrentSession
+      responses:
+        "200":
+          description: 刷新成功，旧 refresh 资格失效并签发新会话
+          headers:
+            Set-Cookie:
+              description: 返回新的 access 会话与 refresh 资格 Cookie
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSessionResponse"
+        "401":
+          description: 刷新资格不存在、已失效、已撤销或已被替换
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/auth/logout:
+    post:
+      summary: 退出当前浏览器当前会话
+      operationId: logoutCurrentSession
+      responses:
+        "204":
+          description: 当前浏览器当前会话及其刷新资格已被清理；响应同时清除相关 Cookie
+components:
+  schemas:
+    SendEmailCodeRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+    EmailCodeAcceptedResponse:
+      type: object
+      required:
+        - status
+        - retry_after_seconds
+        - expires_in_seconds
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+        retry_after_seconds:
+          type: integer
+          minimum: 0
+        expires_in_seconds:
+          type: integer
+          minimum: 1
+    RegisterRequest:
+      type: object
+      required:
+        - email
+        - code
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        code:
+          type: string
+          pattern: "^[0-9]{6}$"
+        password:
+          type: string
+          minLength: 8
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 8
+    AuthSessionResponse:
+      type: object
+      required:
+        - user
+        - session
+      properties:
+        user:
+          $ref: "#/components/schemas/UserSummary"
+        session:
+          $ref: "#/components/schemas/SessionSummary"
+    UserSummary:
+      type: object
+      required:
+        - user_id
+        - email
+        - email_verified
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        email_verified:
+          type: boolean
+    SessionSummary:
+      type: object
+      required:
+        - authenticated
+        - access_expires_at
+        - refresh_expires_at
+      properties:
+        authenticated:
+          type: boolean
+          enum: [true]
+        access_expires_at:
+          type: string
+          format: date-time
+        refresh_expires_at:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    ErrorEnvelope:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          $ref: "#/components/schemas/ErrorResponse"
+    RateLimitErrorResponse:
+      allOf:
+        - $ref: "#/components/schemas/ErrorResponse"
+        - type: object
+          required:
+            - retry_after_seconds
+          properties:
+            retry_after_seconds:
+              type: integer
+              minimum: 0
+    RateLimitErrorEnvelope:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          $ref: "#/components/schemas/RateLimitErrorResponse"
+    ValidationErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            required:
+              - loc
+              - msg
+              - type
+            properties:
+              loc:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: integer
+              msg:
+                type: string
+              type:
+                type: string

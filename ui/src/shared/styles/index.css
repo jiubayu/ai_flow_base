@@ -1,0 +1,17 @@
+@import "./tokens.css";
+@import "./components.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background-color: var(--color-surface-page);
+  color: var(--color-content-primary);
+  font-family: var(--font-family-theme);
+  font-size: var(--font-size-body);
+}
+
+#root {
+  min-height: 100vh;
+}

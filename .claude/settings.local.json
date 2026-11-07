@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv --version)",
+      "Bash(pnpm --version)",
+      "Bash(uv sync *)",
+      "Bash(uv run python -c ' *)",
+      "Bash(bash -n scripts/devctl.sh)",
+      "Bash(uv run *)",
+      "Bash(command -v pnpm)",
+      "Bash(command -v uv)",
+      "Bash(pnpm install *)",
+      "Bash(cp .env.example .env)",
+      "Bash(./scripts/devctl.sh start *)",
+      "Bash(lsof -nP -iTCP:8000 -sTCP:LISTEN)",
+      "Bash(sed *)",
+      "Bash(lsof *)",
+      "Bash(curl *)",
+      "Bash(./scripts/devctl.sh status *)",
+      "Bash(./scripts/devctl.sh stop *)"
+    ]
+  }
+}

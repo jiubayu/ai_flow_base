@@ -1,0 +1,308 @@
+openapi: 3.1.0
+info:
+  title: Workspace Applications API
+  version: 0.1.0
+  description: >
+    个人默认工作空间与应用卡片接口，覆盖默认工作空间自动创建、应用创建、应用列表、
+    应用详情和应用名称/说明编辑。所有接口都依赖当前浏览器认证 Cookie。
+servers:
+  - url: http://127.0.0.1:8000
+paths:
+  /api/workspace/current:
+    get:
+      summary: 获取当前用户默认工作空间和应用卡片列表
+      operationId: getCurrentWorkspace
+      responses:
+        "200":
+          description: 返回当前用户默认工作空间；若不存在则已自动创建
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceOverviewResponse"
+        "401":
+          description: 当前浏览器没有有效登录会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: 默认工作空间初始化失败或服务内部错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+  /api/workspace/applications:
+    post:
+      summary: 在当前默认工作空间中创建应用
+      operationId: createWorkspaceApplication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateApplicationRequest"
+      responses:
+        "201":
+          description: 应用创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationDetailResponse"
+        "400":
+          description: 应用名称或说明不符合规则
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: 当前浏览器没有有效登录会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: 同一工作空间内应用名称已存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: 请求参数结构无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+  /api/workspace/applications/{application_id}:
+    get:
+      summary: 获取当前用户工作空间中的应用详情
+      operationId: getWorkspaceApplication
+      parameters:
+        - name: application_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 返回应用详情与首版空画布视图
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationDetailResponse"
+        "401":
+          description: 当前浏览器没有有效登录会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: 应用不存在或不属于当前用户
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+    patch:
+      summary: 编辑应用名称和说明
+      operationId: updateWorkspaceApplication
+      parameters:
+        - name: application_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateApplicationRequest"
+      responses:
+        "200":
+          description: 应用基础信息已更新
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationDetailResponse"
+        "400":
+          description: 应用名称或说明不符合规则
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: 当前浏览器没有有效登录会话
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: 应用不存在或不属于当前用户
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: 同一工作空间内应用名称已存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: 请求参数结构无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+components:
+  schemas:
+    WorkspaceOverviewResponse:
+      type: object
+      required:
+        - workspace
+        - applications
+      properties:
+        workspace:
+          $ref: "#/components/schemas/WorkspaceSummary"
+        applications:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApplicationCard"
+    WorkspaceSummary:
+      type: object
+      required:
+        - workspace_id
+        - name
+        - is_default
+        - created_at
+        - updated_at
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        is_default:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ApplicationCard:
+      type: object
+      required:
+        - application_id
+        - name
+        - description
+        - status
+        - updated_at
+      properties:
+        application_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        description:
+          type: string
+          maxLength: 500
+        status:
+          type: string
+          enum: [draft]
+        updated_at:
+          type: string
+          format: date-time
+    ApplicationDetailResponse:
+      type: object
+      required:
+        - application
+        - canvas
+      properties:
+        application:
+          $ref: "#/components/schemas/ApplicationDetail"
+        canvas:
+          $ref: "#/components/schemas/ApplicationCanvas"
+    ApplicationDetail:
+      allOf:
+        - $ref: "#/components/schemas/ApplicationCard"
+        - type: object
+          required:
+            - created_at
+          properties:
+            created_at:
+              type: string
+              format: date-time
+    ApplicationCanvas:
+      type: object
+      required:
+        - mode
+        - editable
+        - entry_label
+      properties:
+        mode:
+          type: string
+          enum: [empty]
+        editable:
+          type: boolean
+          const: false
+        entry_label:
+          type: string
+          enum: [开始编排]
+    CreateApplicationRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        description:
+          type: string
+          maxLength: 500
+          default: ""
+    UpdateApplicationRequest:
+      type: object
+      required:
+        - name
+        - description
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        description:
+          type: string
+          maxLength: 500
+    ErrorEnvelope:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              examples:
+                - WORKSPACE_UNAUTHENTICATED
+                - APPLICATION_NAME_DUPLICATED
+                - APPLICATION_NOT_FOUND
+            message:
+              type: string
+    ValidationErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: array
+          items:
+            type: object

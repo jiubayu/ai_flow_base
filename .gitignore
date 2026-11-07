@@ -1,0 +1,15 @@
+# 环境与依赖
+.env
+.venv/
+node_modules/
+
+# 生成产物
+dist/
+__pycache__/
+.pytest_cache/
+
+# 运行期文件（保留 .gitkeep 占位）
+server/logs/*
+!server/logs/.gitkeep
+server/.runtime/*
+!server/.runtime/.gitkeep

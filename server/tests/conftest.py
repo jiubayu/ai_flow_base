@@ -6,11 +6,17 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, List, Tuple
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
+from sqlalchemy.schema import CreateSchema, DropSchema
 
 from src.core.config import load_config
+from src.infrastructure.persistence.database import create_session_factory
+from src.infrastructure.persistence.postgres_migrations import initialize_postgres_schema
 from src.main import create_app
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -195,3 +201,44 @@ def auth_app(auth_config, fake_sender, fake_clock):
 def auth_client(auth_app):
     with TestClient(auth_app) as c:
         yield c
+
+
+@pytest.fixture
+def postgres_base_database_url() -> str:
+    return os.environ.get(
+        "TEST_DATABASE_URL",
+        "postgresql+psycopg://ai_flow:ai_flow@127.0.0.1:5432/ai_flow_test",
+    )
+
+
+@pytest.fixture
+def postgres_database_url(postgres_base_database_url: str, monkeypatch: pytest.MonkeyPatch) -> str:
+    schema = f"test_{uuid4().hex}"
+    url = make_url(postgres_base_database_url).update_query_dict(
+        {"options": f"-csearch_path={schema},public"}
+    )
+    rendered_url = url.render_as_string(hide_password=False)
+    monkeypatch.setenv("DATABASE_URL", rendered_url)
+    return rendered_url
+
+
+@pytest.fixture
+def postgres_engine(postgres_base_database_url: str, postgres_database_url: str):
+    admin_engine = create_engine(postgres_base_database_url, pool_pre_ping=True)
+    schema = make_url(postgres_database_url).query["options"].removeprefix("-csearch_path=").split(",", 1)[0]
+    with admin_engine.begin() as connection:
+        connection.execute(CreateSchema(schema))
+    engine = create_engine(postgres_database_url, pool_pre_ping=True)
+    initialize_postgres_schema(engine)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        with admin_engine.begin() as connection:
+            connection.execute(DropSchema(schema, cascade=True))
+        admin_engine.dispose()
+
+
+@pytest.fixture
+def postgres_session_factory(postgres_engine):
+    return create_session_factory(postgres_engine)

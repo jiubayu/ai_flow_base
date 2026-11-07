@@ -46,3 +46,20 @@ def test_optional_defaults(tmp_path):
     config = load_config(full_env(tmp_path))
     assert config.frontend_port == 5173
     assert config.debug is False
+
+
+def test_load_config_uses_database_url(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text(
+        "BACKEND_HOST=127.0.0.1\n"
+        "BACKEND_PORT=8000\n"
+        "LOG_DIR=logs\n"
+        "RUNTIME_DIR=.runtime\n"
+        "CELERY_BROKER_URL=filesystem://\n"
+        "CELERY_BROKER_DIR=.runtime/celery-queue\n"
+        "DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/ai_flow_test\n"
+    )
+
+    config = load_config(env)
+
+    assert config.database_url == "postgresql+psycopg://user:pass@localhost:5432/ai_flow_test"

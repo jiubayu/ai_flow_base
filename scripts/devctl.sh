@@ -31,7 +31,7 @@ load_config() {
     if [ ! -f "$ENV_FILE" ]; then
         fail "配置文件缺失：${ENV_FILE}。请先执行 cp server/.env.example server/.env 并填写必填项。"
     fi
-    for key in BACKEND_HOST BACKEND_PORT LOG_DIR RUNTIME_DIR CELERY_BROKER_URL CELERY_BROKER_DIR CELERY_RESULT_DB_PATH; do
+    for key in BACKEND_HOST BACKEND_PORT LOG_DIR RUNTIME_DIR CELERY_BROKER_URL CELERY_BROKER_DIR; do
         value="$(env_value "$key")"
         [ -n "$value" ] || fail "缺少必填配置项：${key}（参见 server/.env.example）"
     done

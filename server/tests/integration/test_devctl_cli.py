@@ -1,3 +1,16 @@
+from pathlib import Path
+
+
+def test_compose_defines_pgvector_postgres_service() -> None:
+    root = Path(__file__).resolve().parents[3]
+    compose_text = (root / "docker" / "docker-compose.dev.yml").read_text(encoding="utf-8")
+
+    assert "postgres:" in compose_text
+    assert "pgvector/pgvector:pg16" in compose_text
+    assert "DATABASE_URL" in compose_text
+    assert "condition: service_healthy" in compose_text
+
+
 def test_start_status_stop_lifecycle(devctl):
     start = devctl.run("start")
     assert start.returncode == 0, start.stderr

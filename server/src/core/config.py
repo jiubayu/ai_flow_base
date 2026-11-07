@@ -12,7 +12,6 @@ REQUIRED_KEYS = (
     "RUNTIME_DIR",
     "CELERY_BROKER_URL",
     "CELERY_BROKER_DIR",
-    "CELERY_RESULT_DB_PATH",
 )
 
 
@@ -54,7 +53,8 @@ class Config:
     runtime_dir: Path
     celery_broker_url: str
     celery_broker_dir: Path
-    celery_result_db_path: Path
+    database_url: str = "postgresql+psycopg://ai_flow:ai_flow@127.0.0.1:5432/ai_flow"
+    celery_result_db_path: Path = Path(".runtime/celery_results.db")
     debug: bool = False
     frontend_origin: str = "http://127.0.0.1:5173"
     auth_access_ttl_minutes: int = 15
@@ -97,7 +97,10 @@ def load_config(env_path: Path | None = None) -> Config:
         runtime_dir=server_root / values["RUNTIME_DIR"],
         celery_broker_url=values["CELERY_BROKER_URL"],
         celery_broker_dir=server_root / values["CELERY_BROKER_DIR"],
-        celery_result_db_path=server_root / values["CELERY_RESULT_DB_PATH"],
+        database_url=values.get(
+            "DATABASE_URL", "postgresql+psycopg://ai_flow:ai_flow@127.0.0.1:5432/ai_flow"
+        ),
+        celery_result_db_path=server_root / values.get("CELERY_RESULT_DB_PATH", ".runtime/celery_results.db"),
         debug=values.get("DEBUG", "false").lower() == "true",
         frontend_origin=values.get("FRONTEND_ORIGIN", "http://127.0.0.1:5173"),
         auth_access_ttl_minutes=_positive_int(values, "AUTH_ACCESS_TTL_MINUTES", 15),

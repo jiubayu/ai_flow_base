@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Callable
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError
 
 from src.application.auth.errors import AuthError, RateLimitedError
 from src.application.auth.services import EmailSender
@@ -20,6 +22,7 @@ from src.infrastructure.clock import SystemClock
 from src.infrastructure.logging.file_logger import FileLogger
 from src.infrastructure.persistence.auth_repository import PostgresAuthRepository
 from src.infrastructure.persistence.database import create_database_engine, create_session_factory
+from src.infrastructure.persistence.postgres_migrations import verify_postgres_schema
 from src.infrastructure.persistence.result_store import PostgresDemoTaskResultStore
 from src.infrastructure.persistence.workspace_repository import PostgresWorkspaceRepository
 from src.presentation.api import auth, dev_tasks, health, workspace
@@ -86,19 +89,29 @@ def create_app(
     config = config or load_config()
     validate_startup(config)
 
-    app = FastAPI(title="Bootstrap Development API")
-    app.state.config = config
-
+    logger = configure_logging(FileLogger(config.log_dir / "backend.log"), "backend", config.debug)
     engine = create_database_engine(config)
     session_factory = create_session_factory(engine)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        try:
+            report = verify_postgres_schema(engine)
+        except OperationalError as exc:
+            logger.error(f"数据库连接失败：{exc}")
+            raise
+        logger.info(
+            f"database.postgres.initialized pgvector={'enabled' if report['vector_extension'] else 'missing'}"
+        )
+        yield
+
+    app = FastAPI(title="Bootstrap Development API", lifespan=lifespan)
+    app.state.config = config
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
     app.state.result_store = PostgresDemoTaskResultStore(session_factory)
     app.state.dispatch = dispatch or default_dispatch
-
-    logger = configure_logging(FileLogger(config.log_dir / "backend.log"), "backend", config.debug)
     app.state.logger = logger
-    logger.info("database.postgres.initialized pgvector=enabled")
     logger.info(f"后端服务启动：http://{config.backend_host}:{config.backend_port}")
 
     auth_use_case, workspace_use_case = build_services(

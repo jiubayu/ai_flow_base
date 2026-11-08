@@ -113,7 +113,7 @@ class WorkspaceMembershipModel(Base):
             "workspace_id",
             "user_id",
             unique=True,
-            postgresql_where=text("status") == "active",
+            postgresql_where=text("status = 'active'"),
         ),
         Index("ix_memberships_workspace_status_role", "workspace_id", "status", "role"),
     )

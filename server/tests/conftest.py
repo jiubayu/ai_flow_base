@@ -60,6 +60,7 @@ class DevctlHarness:
             "CELERY_BROKER_URL=filesystem://\n"
             "CELERY_BROKER_DIR=.runtime/celery-queue\n"
             f"FRONTEND_PORT={self.frontend_port}\n"
+            "DATABASE_URL=postgresql+psycopg://ai_flow:ai_flow@127.0.0.1:5432/ai_flow\n"
         )
 
     def run(self, subcommand: str) -> subprocess.CompletedProcess:
@@ -231,8 +232,9 @@ def postgres_engine(postgres_base_database_url: str, postgres_database_url: str)
     with admin_engine.begin() as connection:
         connection.execute(CreateSchema(schema))
     engine = create_engine(postgres_database_url, pool_pre_ping=True)
+    # metadata.schema 在模型定义时已被捕获为 None，事后赋值不生效；
+    # 必须 checkfirst=False，让 CREATE TABLE 经 search_path 建进测试 schema。
     initialize_postgres_schema(engine)
-    # checkfirst 会看到 public 里的同名表而跳过建表；schema 是新建的，必须 checkfirst=False 显式建在测试 schema 内，否则读写回落到 public。
     Base.metadata.schema = schema
     try:
         Base.metadata.create_all(engine, checkfirst=False)

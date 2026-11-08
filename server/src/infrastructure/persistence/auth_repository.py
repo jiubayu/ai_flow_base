@@ -3,7 +3,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
+from src.application.auth.errors import AuthError, EmailAlreadyRegisteredError
 from src.domain.auth.entities import (
     AuthAuditEvent,
     AuthSession,
@@ -37,20 +39,26 @@ class PostgresAuthRepository:
             uow.save_user(user)
             return
 
-        with self._session_factory.begin() as session:
-            record = session.get(UserAccountModel, user.user_id)
-            if record is None:
-                record = UserAccountModel(user_id=user.user_id)
-            record.email = user.email
-            record.username = user.username
-            record.email_verified_at = user.email_verified_at
-            record.password_hash = user.password_hash
-            record.password_hash_version = user.password_hash_version
-            record.password_updated_at = user.password_updated_at
-            record.created_at = user.created_at
-            record.updated_at = user.updated_at
-            record.last_login_at = user.last_login_at
-            session.add(record)
+        try:
+            with self._session_factory.begin() as session:
+                record = session.get(UserAccountModel, user.user_id)
+                if record is None:
+                    record = UserAccountModel(user_id=user.user_id)
+                record.email = user.email
+                record.username = user.username
+                record.email_verified_at = user.email_verified_at
+                record.password_hash = user.password_hash
+                record.password_hash_version = user.password_hash_version
+                record.password_updated_at = user.password_updated_at
+                record.created_at = user.created_at
+                record.updated_at = user.updated_at
+                record.last_login_at = user.last_login_at
+                session.add(record)
+        except IntegrityError as exc:
+            # 只有唯一约束冲突才是"已被注册"；其他完整性错误原样抛出。
+            if getattr(exc.orig, "sqlstate", None) != "23505":
+                raise
+            raise EmailAlreadyRegisteredError(f"邮箱已被注册：{user.email}") from exc
 
     def get_user_by_email(self, email: str) -> UserAccount | None:
         with self._session_factory() as session:
@@ -220,31 +228,34 @@ class PostgresAuthRepository:
         new_grant: RefreshGrant,
         new_session: AuthSession,
     ) -> None:
-        with self._session_factory.begin() as session:
-            session.execute(
-                update(RefreshGrantModel)
-                .where(RefreshGrantModel.refresh_grant_id == old_grant.refresh_grant_id)
-                .values(
-                    state=old_grant.state.value,
-                    revoked_at=old_grant.revoked_at,
-                    replaced_by_id=old_grant.replaced_by_id,
-                    last_used_at=old_grant.last_used_at,
-                )
-            )
-            if old_session is not None:
+        try:
+            with self._session_factory.begin() as session:
                 session.execute(
-                    update(AuthSessionModel)
-                    .where(AuthSessionModel.session_id == old_session.session_id)
+                    update(RefreshGrantModel)
+                    .where(RefreshGrantModel.refresh_grant_id == old_grant.refresh_grant_id)
                     .values(
-                        state=old_session.state.value,
-                        revoked_at=old_session.revoked_at,
-                        last_seen_at=old_session.last_seen_at,
+                        state=old_grant.state.value,
+                        revoked_at=old_grant.revoked_at,
+                        replaced_by_id=old_grant.replaced_by_id,
+                        last_used_at=old_grant.last_used_at,
                     )
                 )
-            session.add(_grant_model(new_grant))
-            # 两个模型之间没有 relationship，flush 的拓扑排序无法保证父表先插入；显式 flush 确保 grant 先于 session 落库。
-            session.flush()
-            session.add(_session_model(new_session))
+                if old_session is not None:
+                    session.execute(
+                        update(AuthSessionModel)
+                        .where(AuthSessionModel.session_id == old_session.session_id)
+                        .values(
+                            state=old_session.state.value,
+                            revoked_at=old_session.revoked_at,
+                            last_seen_at=old_session.last_seen_at,
+                        )
+                    )
+                session.add(_grant_model(new_grant))
+                # 两个模型之间没有 relationship，flush 的拓扑排序无法保证父表先插入；显式 flush 确保 grant 先于 session 落库。
+                session.flush()
+                session.add(_session_model(new_session))
+        except IntegrityError as exc:
+            raise AuthError("会话轮换写入冲突") from exc
 
     def record_audit(self, event: AuthAuditEvent) -> None:
         with self._session_factory.begin() as session:

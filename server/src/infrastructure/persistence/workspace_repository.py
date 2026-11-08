@@ -4,7 +4,9 @@ import logging
 from contextlib import contextmanager
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
+from src.application.workspace.errors import WorkspaceMemberAlreadyExistsError
 from src.application.workspace.ports import WorkspaceMemberView, WorkspaceUnitOfWork
 from src.domain.auth.entities import UserAccount
 from src.domain.workspace.entities import (
@@ -122,8 +124,16 @@ class PostgresWorkspaceRepository:
             ]
 
     def save_membership(self, membership: WorkspaceMembership) -> None:
-        with self._session_factory.begin() as session:
-            session.merge(_membership_model(membership))
+        try:
+            with self._session_factory.begin() as session:
+                session.merge(_membership_model(membership))
+        except IntegrityError as exc:
+            # 只有唯一索引冲突才是"已是成员"；外键等其他完整性错误原样抛出。
+            if getattr(exc.orig, "sqlstate", None) != "23505":
+                raise
+            raise WorkspaceMemberAlreadyExistsError(
+                f"工作空间 {membership.workspace_id} 中用户 {membership.user_id} 已是成员"
+            ) from exc
 
     def get_user_by_id(self, user_id: str) -> UserAccount | None:
         with self._session_factory() as session:

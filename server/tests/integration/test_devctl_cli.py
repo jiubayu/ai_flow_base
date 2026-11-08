@@ -43,3 +43,16 @@ def test_status_reports_stale_pid(devctl):
     stop = devctl.run("stop")
     assert "执行清理" in stop.stdout
     assert not (pid_path / "backend.pid").exists()
+
+
+def test_devctl_fails_when_database_url_missing(devctl):
+    env_file = devctl.root / "server" / ".env"
+    env_file.write_text(
+        env_file.read_text().replace(
+            "DATABASE_URL=postgresql+psycopg://ai_flow:ai_flow@127.0.0.1:5432/ai_flow\n", ""
+        )
+    )
+
+    status = devctl.run("status")
+    assert status.returncode != 0
+    assert "DATABASE_URL" in status.stderr

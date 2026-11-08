@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import create_engine, inspect
+from sqlalchemy.engine import make_url
 
 from src.infrastructure.persistence.models import Base
 from src.infrastructure.persistence.postgres_migrations import (
@@ -61,3 +63,12 @@ def test_app_fixture_uses_isolated_schema(app) -> None:
         schema = connection.exec_driver_sql("SELECT current_schema()").scalar_one()
 
     assert schema.startswith("test_")
+
+
+def test_tables_are_created_in_the_test_schema(postgres_engine) -> None:
+    # Issue 4: metadata.schema is captured at model-definition time, so setting it after
+    # import does not move already-defined tables. Isolation must come from creating the
+    # tables through search_path into the per-test schema — assert that outcome directly.
+    schema = make_url(postgres_engine.url).query["options"].removeprefix("-csearch_path=").split(",", 1)[0]
+
+    assert len(inspect(postgres_engine).get_table_names(schema=schema)) == 16

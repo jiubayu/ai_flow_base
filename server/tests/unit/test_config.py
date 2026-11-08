@@ -13,6 +13,7 @@ def full_env(tmp_path):
         "CELERY_BROKER_URL=filesystem://\n"
         "CELERY_BROKER_DIR=.runtime/celery-queue\n"
         "CELERY_RESULT_DB_PATH=results.db\n"
+        "DATABASE_URL=postgresql+psycopg://ai_flow:ai_flow@127.0.0.1:5432/ai_flow\n"
     )
     return env
 
@@ -63,6 +64,22 @@ def test_load_config_uses_database_url(tmp_path):
     config = load_config(env)
 
     assert config.database_url == "postgresql+psycopg://user:pass@localhost:5432/ai_flow_test"
+
+def test_load_config_requires_database_url(tmp_path):
+    env = full_env(tmp_path)
+    env.write_text(env.read_text().replace("DATABASE_URL=postgresql+psycopg://ai_flow:ai_flow@127.0.0.1:5432/ai_flow\n", ""))
+    with pytest.raises(ConfigError, match="DATABASE_URL"):
+        load_config(env)
+
+
+def test_load_config_environment_overrides_file(tmp_path, monkeypatch):
+    env = full_env(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://ci:ci@db:5432/ci_db")
+
+    config = load_config(env)
+
+    assert config.database_url == "postgresql+psycopg://ci:ci@db:5432/ci_db"
+
 
 def test_config_no_longer_exposes_result_db_path(tmp_path):
     config = load_config(full_env(tmp_path))

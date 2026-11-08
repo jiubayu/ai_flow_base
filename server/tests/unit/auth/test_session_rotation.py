@@ -2,8 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 
+from src.application.auth.errors import AuthError
 from src.domain.auth.entities import AuthSession, RefreshGrant, UserAccount
 from src.infrastructure.persistence.auth_repository import PostgresAuthRepository
 from src.infrastructure.persistence.models import AuthSessionModel, RefreshGrantModel
@@ -111,7 +111,7 @@ def test_rotate_session_rolls_back_when_a_write_fails(postgres_session_factory):
     new_grant = _grant("new-grant-rollback", rotated_from_id="old-grant-rollback")
     new_session = _session("new-session-rollback", "new-grant-rollback")
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(AuthError):
         repo.rotate_session(old_grant, old_session, new_grant, new_session)
 
     with postgres_session_factory() as session:

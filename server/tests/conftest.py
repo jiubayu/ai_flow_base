@@ -116,7 +116,6 @@ def config(tmp_path: Path, postgres_database_url: str):
         "RUNTIME_DIR=.runtime\n"
         "CELERY_BROKER_URL=filesystem://\n"
         "CELERY_BROKER_DIR=.runtime/celery-queue\n"
-        "CELERY_RESULT_DB_PATH=results.db\n"
         f"DATABASE_URL={postgres_database_url}\n"
         "DEBUG=true\n"
     )
@@ -129,11 +128,10 @@ def dispatch_calls() -> List[Tuple[str, str]]:
 
 
 @pytest.fixture
-def app(config, dispatch_calls):
+def app(config, dispatch_calls, postgres_engine):
+    # postgres_engine creates the per-test schema and initializes it before create_app connects.
     dispatch: Callable[[str, str], None] = lambda task_id, message: dispatch_calls.append((task_id, message))
-    application = create_app(config, dispatch)
-    initialize_postgres_schema(application.state.db_engine)
-    return application
+    return create_app(config, dispatch)
 
 
 @pytest.fixture
@@ -183,7 +181,6 @@ def auth_config(tmp_path: Path, postgres_database_url: str):
         "RUNTIME_DIR=.runtime\n"
         "CELERY_BROKER_URL=filesystem://\n"
         "CELERY_BROKER_DIR=.runtime/celery-queue\n"
-        "CELERY_RESULT_DB_PATH=auth-tests.db\n"
         f"DATABASE_URL={postgres_database_url}\n"
         "DEBUG=true\n"
         "AUTH_ACCESS_TTL_MINUTES=1\n"

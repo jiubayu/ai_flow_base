@@ -17,7 +17,7 @@
 
 - `APP_DEBUG=true`
 - `FRONTEND_ORIGIN=http://127.0.0.1:5173`
-- `RESULT_DB_PATH=.runtime/demo-tasks.sqlite3`
+- `DATABASE_URL=postgresql+psycopg://ai_flow:ai_flow@127.0.0.1:5432/ai_flow`
 - `AUTH_ACCESS_TTL_MINUTES`
 - `AUTH_REFRESH_TTL_DAYS`
 - `AUTH_CODE_TTL_MINUTES`
@@ -34,13 +34,13 @@
 说明：
 
 - 本地开发可把 access TTL 设为较短值，便于验证刷新链路。
-- `RESULT_DB_PATH` 继续作为本地 SQLite 数据文件入口，认证表会迁入同一数据库文件。
+- 认证表位于 PostgreSQL（pgvector）schema，由 `scripts/migrate_postgres_schema.py` 初始化；旧 SQLite 数据文件不迁移、不读取。
 
 ## 2. 执行认证数据库迁移
 
 ```bash
 cd server
-uv run python scripts/migrate_auth_schema.py
+uv run python scripts/migrate_postgres_schema.py
 ```
 
 预期结果：
@@ -136,7 +136,7 @@ pnpm run build
 ## 9. 检查日志与数据库状态
 
 - 查看 `server/logs/backend.log`，确认存在验证码发送、登录、刷新、登出等调试日志
-- 查询 SQLite 数据库，确认：
+- 查询 PostgreSQL 数据库，确认：
   - 用户邮箱已归一化存储
   - 当前浏览器登出后对应会话记录已撤销
   - 刷新成功后旧刷新资格已被标记替换

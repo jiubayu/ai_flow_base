@@ -13,31 +13,14 @@
 
 ```bash
 cd server
-uv run python scripts/migrate_auth_schema.py
+uv run python scripts/migrate_postgres_schema.py
 ```
 
-2. 验证 schema 和存量回填：
+2. 验证 schema：
 
 ```bash
 cd server
-uv run python - <<'PY'
-import sqlite3
-from src.core.config import get_settings
-
-db = get_settings().result_store_path
-with sqlite3.connect(db) as con:
-    for table in ["workspaces", "workspace_memberships", "user_workspace_preferences", "workspace_audit_events"]:
-        row = con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
-        assert row is not None, table
-    missing_workspace = con.execute("""
-        SELECT COUNT(*) FROM user_accounts
-        WHERE user_id NOT IN (
-            SELECT user_id FROM workspace_memberships WHERE status = 'active'
-        )
-    """).fetchone()[0]
-    assert missing_workspace == 0, missing_workspace
-print("workspace migration verified")
-PY
+uv run python scripts/migrate_postgres_schema.py   # 幂等 schema 初始化，校验输出按表报告缺失项（含 vector_extension）
 ```
 
 ## Backend Tests
@@ -147,7 +130,7 @@ pnpm run dev
 
 ## Data Upgrade Release Notes
 
-- Back up SQLite database before migration.
+- 旧 SQLite 数据文件不迁移、不读取；PostgreSQL schema 由 `scripts/migrate_postgres_schema.py` 幂等初始化。
 - Deploy compatible code that can read users with and without workspace preference during migration.
 - Run migration and validation before enabling member management UI.
 - If validation fails before release, restore backup and keep old application version.

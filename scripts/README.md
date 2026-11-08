@@ -14,7 +14,8 @@
 
 ## 前置条件
 
-- `server/.env` 存在且必填项完整（从 `server/.env.example` 复制）；缺失时显式失败。
+- `server/.env` 存在且必填项完整（从 `server/.env.example` 复制，含必填的 `DATABASE_URL`）；缺失时显式失败。
+- PostgreSQL（pgvector）已在运行（`docker compose -f docker/docker-compose.dev.yml up -d postgres`）；devctl 只管理 backend/celery/frontend，不启动数据库。
 - `BACKEND_PORT`、`FRONTEND_PORT` 未被占用；冲突时输出责任服务。
 - 重复执行 `start` 会被拒绝，需先 `stop`。
 

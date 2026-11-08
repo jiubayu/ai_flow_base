@@ -1,6 +1,6 @@
 # my_pro：前后端工程初始化与启停脚本
 
-本地开发骨架：FastAPI 后端 + Celery worker（文件系统 broker / SQLite 结果存储）+ Vite/React 前端，由统一脚本 `scripts/devctl.sh` 管理启停。
+本地开发骨架：FastAPI 后端 + Celery worker（文件系统 broker / PostgreSQL（pgvector）结果存储）+ Vite/React 前端，由统一脚本 `scripts/devctl.sh` 管理启停。
 
 ## 快速开始
 
@@ -8,6 +8,8 @@
 
 ```bash
 cd server && uv sync && cp .env.example .env
+docker compose -f docker/docker-compose.dev.yml up -d postgres
+uv run python scripts/migrate_postgres_schema.py
 cd ../ui && pnpm install && cp .env.example .env
 ./scripts/devctl.sh start
 ```
@@ -23,7 +25,7 @@ my_pro/
 │   ├── src/            # core / domain / application / infrastructure / presentation
 │   ├── tests/          # contract / integration / unit 测试
 │   ├── logs/           # 运行日志（devctl 写入，不入库）
-│   └── .runtime/       # PID、Celery 队列与结果库（不入库）
+│   └── .runtime/       # PID、Celery 队列（不入库）
 ├── ui/                 # Vite + React + Tailwind 前端（见 ui/README.md）
 └── specs/              # 规格、契约与快速开始文档
 ```
@@ -45,7 +47,13 @@ my_pro/
 
 - 配置模板：`server/.env.example`、`ui/.env.example`；真实 `.env` 由开发者本地生成，不入库。
 - 日志目录：`server/logs/`（`backend.log`、`celery.log`、`frontend.log`）。
-- 运行状态：`server/.runtime/`（PID 文件、Celery 文件系统队列、SQLite 结果库）。
+- 运行状态：`server/.runtime/`（PID 文件、Celery 文件系统队列）。
+
+## 持久化
+
+- 运行时持久化为 PostgreSQL（pgvector）：`DATABASE_URL` 必填；`docker/docker-compose.dev.yml` 启动 pgvector PostgreSQL 服务。
+- 旧 SQLite 数据文件不迁移、不读取。
+- Schema 初始化命令：`cd server && uv run python scripts/migrate_postgres_schema.py`（幂等），校验输出包含 `vector_extension: true`。
 
 ## 验证
 

@@ -2,6 +2,12 @@
 
 分层架构，入口为 `src/main.py`（`create_app()`），Celery 入口为 `src/celery_app.py`。
 
+## 持久化
+
+- 运行时持久化为 PostgreSQL（pgvector）：`DATABASE_URL` 必填；`docker/docker-compose.dev.yml` 启动 pgvector PostgreSQL 服务。
+- 旧 SQLite 数据文件不迁移、不读取。
+- Schema 初始化命令：`uv run python scripts/migrate_postgres_schema.py`（幂等），校验输出包含 `vector_extension: true`。
+
 ## 启动
 
 ```bash
@@ -14,7 +20,7 @@ uv run celery -A src.celery_app:app worker -l info
 ## 认证（邮箱验证码与密码）
 
 ```bash
-uv run python scripts/migrate_auth_schema.py   # 幂等迁移；认证表与结果库共用同一 SQLite 文件
+uv run python scripts/migrate_postgres_schema.py   # 幂等 schema 初始化 + 校验输出（含 vector_extension）
 ```
 
 - `.env` 需补齐 `AUTH_ACCESS_TTL_MINUTES`、`AUTH_REFRESH_TTL_DAYS`、`AUTH_CODE_TTL_MINUTES`、限流参数与 `SMTP_*` 配置；SMTP 缺失时发送验证码接口显式失败（503），不静默兜底。
@@ -25,10 +31,10 @@ uv run python scripts/migrate_auth_schema.py   # 幂等迁移；认证表与结�
 ## 工作空间与成员管理
 
 ```bash
-uv run python scripts/migrate_auth_schema.py   # 同一脚本幂等执行认证 + 工作空间迁移
+uv run python scripts/migrate_postgres_schema.py   # 同一脚本幂等初始化全部表（含认证与工作空间）
 ```
 
-- 工作空间表（`workspaces`、`workspace_memberships`、`workspace_memberships_history`、`workspace_audit_events`）与认证表共用同一 SQLite 文件；迁移幂等，`user_accounts.username` 列缺失时自动补齐并回填历史数据。
+- 工作空间表（`workspaces`、`workspace_memberships`、`workspace_memberships_history`、`workspace_audit_events`）与认证表同在 PostgreSQL schema，由 `scripts/migrate_postgres_schema.py` 幂等初始化；`user_accounts.username` 为 NOT NULL。
 - 活跃成员唯一性由部分唯一索引 `ux_memberships_active` 保证；历史表记录成员角色与状态变更，审计事件按工作空间记录操作。
 - 业务规则：角色仅 `manager` / `member`；最后一个管理者不可降级或移除（last-manager 保护）；成员被移除后重新加入会生成新的活跃成员记录。
 - 当前工作空间按用户偏好（preference）恢复；偏好失效时回落到用户可访问的第一个工作空间。
@@ -37,10 +43,10 @@ uv run python scripts/migrate_auth_schema.py   # 同一脚本幂等执行认证 
 ## 应用工作空间（005）
 
 ```bash
-uv run python scripts/migrate_workspace_schema.py   # 幂等迁移 + schema 校验输出
+uv run python scripts/migrate_postgres_schema.py   # 幂等 schema 初始化 + 校验输出
 ```
 
-- 迁移覆盖 `workspaces`、`workspace_memberships`、`user_workspace_preferences`、`workspace_audit_events` 与 `workspace_applications`；重复执行安全，校验结果按表输出缺失项（缺失时脚本以非零码退出）。
+- schema 初始化覆盖 `workspaces`、`workspace_memberships`、`user_workspace_preferences`、`workspace_audit_events` 与 `workspace_applications`；重复执行安全，校验结果按表输出缺失项（缺失时脚本以非零码退出）。
 - `workspace_applications` 的名称唯一性由唯一索引 `ux_workspace_applications_name`（`workspace_id, name`）保证；卡片列表按 `ix_workspace_applications_workspace`（`workspace_id, updated_at`）读取。
 - 应用只有名称与描述可编辑，首版没有删除能力；名称 1-80 个非空白字符、描述 0-500 字符，重复名称返回 409。
 - 身份一律来自会话 Cookie（`GET /api/workspace/current`、`POST|GET|PATCH /api/workspace/applications*`），不接受客户端传入的 `user_id`。
@@ -78,6 +84,6 @@ uv run pytest tests/contract/test_auth_api.py tests/contract/test_workspace_api.
 ## 运行产物
 
 - 日志：`logs/`（由 devctl 或应用写入）
-- 运行状态：`.runtime/`（PID、Celery 队列、SQLite 结果库）
+- 运行状态：`.runtime/`（PID、Celery 队列）
 
 两者均不入库，仅保留 `.gitkeep` 占位。

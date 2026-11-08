@@ -18,19 +18,19 @@
 
 - `APP_DEBUG=true`
 - `FRONTEND_ORIGIN=http://127.0.0.1:5173`
-- `RESULT_DB_PATH=.runtime/demo-tasks.sqlite3`
+- `DATABASE_URL=postgresql+psycopg://ai_flow:ai_flow@127.0.0.1:5432/ai_flow`
 - 认证功能所需 Cookie 与 SMTP 配置已按认证 quickstart 配好
 
 说明：
 
-- 工作空间表复用 `RESULT_DB_PATH` 指向的 SQLite 文件。
+- 工作空间表位于 PostgreSQL（pgvector）schema；旧 SQLite 数据文件不迁移、不读取。
 - debug 日志应能观察工作空间自动创建、应用创建、应用编辑和权限拒绝路径。
 
 ## 2. 执行工作空间数据库迁移
 
 ```bash
 cd server
-uv run python scripts/migrate_workspace_schema.py
+uv run python scripts/migrate_postgres_schema.py
 ```
 
 预期结果：
@@ -69,7 +69,7 @@ pnpm run dev
 
 1. 使用一个新账号完成注册或登录。
 2. 打开前端应用或请求当前工作空间接口。
-3. 查询 SQLite 数据库中的 `workspaces` 表。
+3. 查询 PostgreSQL 数据库中的 `workspaces` 表。
 
 预期结果：
 
@@ -156,7 +156,7 @@ pnpm run build
   - 应用名称/说明编辑成功
   - 重名拒绝
   - 无权访问拒绝
-- 查询 SQLite 数据库，确认：
+- 查询 PostgreSQL 数据库，确认：
   - 每个用户只有 1 个默认工作空间
   - 同一工作空间内应用名称唯一
   - 不同用户工作空间可以存在同名应用

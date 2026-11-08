@@ -51,14 +51,14 @@ class RefreshGrantModel(Base):
     __tablename__ = "refresh_grants"
     __table_args__ = (Index("ix_refresh_grants_user_scope_state", "user_id", "client_scope", "state"),)
 
-    refresh_grant_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    refresh_grant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("user_accounts.user_id"), nullable=False)
     client_scope: Mapped[str] = mapped_column(String(255), nullable=False)
-    rotated_from_id: Mapped[str | None] = mapped_column(String(36))
+    rotated_from_id: Mapped[str | None] = mapped_column(String(64))
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    replaced_by_id: Mapped[str | None] = mapped_column(String(36))
+    replaced_by_id: Mapped[str | None] = mapped_column(String(64))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     state: Mapped[str] = mapped_column(String(255), nullable=False)
 
@@ -67,10 +67,10 @@ class AuthSessionModel(Base):
     __tablename__ = "auth_sessions"
     __table_args__ = (Index("ix_auth_sessions_grant", "refresh_grant_id"),)
 
-    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("user_accounts.user_id"), nullable=False)
     refresh_grant_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("refresh_grants.refresh_grant_id"), nullable=False
+        String(64), ForeignKey("refresh_grants.refresh_grant_id"), nullable=False
     )
     client_scope: Mapped[str] = mapped_column(String(255), nullable=False)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

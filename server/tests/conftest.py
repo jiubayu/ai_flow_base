@@ -16,6 +16,7 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 
 from src.core.config import load_config
 from src.infrastructure.persistence.database import create_session_factory
+from src.infrastructure.persistence.models import Base
 from src.infrastructure.persistence.postgres_migrations import initialize_postgres_schema
 from src.main import create_app
 
@@ -173,7 +174,7 @@ def fake_sender() -> RecordingSender:
 
 
 @pytest.fixture
-def auth_config(tmp_path: Path):
+def auth_config(tmp_path: Path, postgres_database_url: str):
     env = tmp_path / "auth.env"
     env.write_text(
         "BACKEND_HOST=127.0.0.1\n"
@@ -183,6 +184,7 @@ def auth_config(tmp_path: Path):
         "CELERY_BROKER_URL=filesystem://\n"
         "CELERY_BROKER_DIR=.runtime/celery-queue\n"
         "CELERY_RESULT_DB_PATH=auth-tests.db\n"
+        f"DATABASE_URL={postgres_database_url}\n"
         "DEBUG=true\n"
         "AUTH_ACCESS_TTL_MINUTES=1\n"
         "AUTH_REFRESH_TTL_DAYS=14\n"
@@ -196,7 +198,8 @@ def auth_config(tmp_path: Path):
 
 
 @pytest.fixture
-def auth_app(auth_config, fake_sender, fake_clock):
+def auth_app(auth_config, fake_sender, fake_clock, postgres_engine):
+    # postgres_engine creates the per-test schema and initializes it before create_app connects.
     return create_app(auth_config, lambda task_id, message: None, auth_sender=fake_sender, clock=fake_clock)
 
 
@@ -233,6 +236,12 @@ def postgres_engine(postgres_base_database_url: str, postgres_database_url: str)
         connection.execute(CreateSchema(schema))
     engine = create_engine(postgres_database_url, pool_pre_ping=True)
     initialize_postgres_schema(engine)
+    # checkfirst 会看到 public 里的同名表而跳过建表；schema 是新建的，必须 checkfirst=False 显式建在测试 schema 内，否则读写回落到 public。
+    Base.metadata.schema = schema
+    try:
+        Base.metadata.create_all(engine, checkfirst=False)
+    finally:
+        Base.metadata.schema = None
     try:
         yield engine
     finally:

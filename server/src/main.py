@@ -5,7 +5,6 @@ from typing import Callable
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import create_engine
 
 from src.application.auth.errors import AuthError, RateLimitedError
 from src.application.auth.services import EmailSender
@@ -19,11 +18,10 @@ from src.core.logging import configure_logging
 from src.domain.auth.services import RateLimitPolicy
 from src.infrastructure.clock import SystemClock
 from src.infrastructure.logging.file_logger import FileLogger
-from src.infrastructure.persistence.auth_migrations import run_migrations as run_auth_migrations
-from src.infrastructure.persistence.auth_repository import SqlAuthRepository
+from src.infrastructure.persistence.auth_repository import PostgresAuthRepository
 from src.infrastructure.persistence.database import create_database_engine, create_session_factory
 from src.infrastructure.persistence.result_store import PostgresDemoTaskResultStore
-from src.infrastructure.persistence.workspace_repository import SqlWorkspaceRepository
+from src.infrastructure.persistence.workspace_repository import PostgresWorkspaceRepository
 from src.presentation.api import auth, dev_tasks, health, workspace
 
 
@@ -47,14 +45,13 @@ def build_services(
     *,
     clock=None,
     auth_sender: EmailSender | None = None,
+    session_factory,
 ) -> tuple[AuthUseCase, WorkspaceUseCase]:
     from src.infrastructure.security.cookie_session_manager import CookieSessionManager
     from src.infrastructure.security.password_hasher import ScryptPasswordHasher
 
-    engine = create_engine(f"sqlite:///{config.celery_result_db_path}", future=True)
-    run_auth_migrations(config.celery_result_db_path, logger)
-    auth_repo = SqlAuthRepository(engine, logger)
-    workspace_repo = SqlWorkspaceRepository(engine, config.celery_result_db_path, logger)
+    auth_repo = PostgresAuthRepository(session_factory, logger)
+    workspace_repo = PostgresWorkspaceRepository(session_factory, logger)
 
     clock = clock or SystemClock()
     workspace_use_case = WorkspaceUseCase(workspace_repo, clock, logger)
@@ -103,7 +100,9 @@ def create_app(
     app.state.logger = logger
     logger.info(f"后端服务启动：http://{config.backend_host}:{config.backend_port}")
 
-    auth_use_case, workspace_use_case = build_services(config, logger, clock=clock, auth_sender=auth_sender)
+    auth_use_case, workspace_use_case = build_services(
+        config, logger, clock=clock, auth_sender=auth_sender, session_factory=session_factory
+    )
     app.state.auth_use_case = auth_use_case
     app.state.workspace_use_case = workspace_use_case
     logger.info(

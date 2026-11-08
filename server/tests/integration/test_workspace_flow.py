@@ -2,9 +2,9 @@
 import json
 
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import func, select
 
-from src.infrastructure.persistence.workspace_migrations import run_migrations
+from src.infrastructure.persistence.models import WorkspaceApplicationModel, WorkspaceModel
 
 PASSWORD = "passw0rd"
 
@@ -23,7 +23,7 @@ def _repo(auth_app):
     return auth_app.state.workspace_use_case.repo
 
 
-def test_register_creates_default_workspace_membership_and_preference(auth_app, auth_client, fake_sender):
+def test_register_creates_default_workspace_membership_and_preference(auth_app, auth_client, fake_sender, postgres_session_factory):
     body = _register(auth_client, fake_sender, "alice@example.com").json()
     user_id = body["user"]["user_id"]
     workspace_id = body["workspace"]["current"]["workspace_id"]
@@ -43,40 +43,12 @@ def test_register_creates_default_workspace_membership_and_preference(auth_app, 
     assert preference is not None
     assert preference.last_workspace_id == workspace_id
 
-    with repo.engine.connect() as conn:
-        count = conn.execute(
-            text("SELECT COUNT(*) FROM workspaces WHERE created_by_user_id = :user_id"),
-            {"user_id": user_id},
-        ).fetchone()[0]
-    assert count == 1
-
-
-def test_backfill_default_workspaces_is_idempotent(auth_app, auth_client, fake_sender, auth_config):
-    body = _register(auth_client, fake_sender, "alice@example.com").json()
-    user_id = body["user"]["user_id"]
-    repo = _repo(auth_app)
-
-    with repo.engine.begin() as conn:
-        conn.execute(text("DELETE FROM workspaces WHERE created_by_user_id = :user_id"), {"user_id": user_id})
-        conn.execute(text("DELETE FROM workspace_memberships WHERE user_id = :user_id"), {"user_id": user_id})
-        conn.execute(text("DELETE FROM user_workspace_preferences WHERE user_id = :user_id"), {"user_id": user_id})
-
-    run_migrations(auth_config.celery_result_db_path, auth_app.state.logger)
-    memberships = repo.list_active_memberships_for_user(user_id)
-    assert len(memberships) == 1
-    workspace = repo.get_workspace(memberships[0].workspace_id)
-    assert workspace is not None
-    assert workspace.name == "alice 的工作空间"
-    assert memberships[0].role.value == "manager"
-
-    # 第二次执行不重复创建
-    run_migrations(auth_config.celery_result_db_path, auth_app.state.logger)
-    assert len(repo.list_active_memberships_for_user(user_id)) == 1
-    with repo.engine.connect() as conn:
-        count = conn.execute(
-            text("SELECT COUNT(*) FROM workspaces WHERE created_by_user_id = :user_id"),
-            {"user_id": user_id},
-        ).fetchone()[0]
+    with postgres_session_factory() as session:
+        count = session.scalar(
+            select(func.count())
+            .select_from(WorkspaceModel)
+            .where(WorkspaceModel.created_by_user_id == user_id)
+        )
     assert count == 1
 
 
@@ -169,7 +141,7 @@ def test_same_user_manager_in_one_workspace_member_in_another(auth_app, auth_cli
 # ----------------------------------------------------------------------
 
 
-def test_application_lifecycle_flow(auth_app, auth_client, fake_sender):
+def test_application_lifecycle_flow(auth_app, auth_client, fake_sender, postgres_session_factory):
     alice_id = _register(auth_client, fake_sender, "alice@example.com").json()["user"]["user_id"]
     repo = _repo(auth_app)
 
@@ -200,10 +172,13 @@ def test_application_lifecycle_flow(auth_app, auth_client, fake_sender):
     detail = auth_client.get(f"/api/workspace/applications/{application_id}").json()["application"]
     assert detail == updated
 
-    with repo.engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT name, description, status FROM workspace_applications WHERE application_id = :aid"),
-            {"aid": application_id},
+    with postgres_session_factory() as session:
+        row = session.execute(
+            select(
+                WorkspaceApplicationModel.name,
+                WorkspaceApplicationModel.description,
+                WorkspaceApplicationModel.status,
+            ).where(WorkspaceApplicationModel.application_id == application_id)
         ).fetchone()
     assert row == ("客服助手 Pro", "", "draft")
 
@@ -234,15 +209,3 @@ def test_application_isolation_between_users(auth_app, auth_client, fake_sender)
         assert overview["applications"] == []
 
 
-def test_workspace_applications_migration_is_idempotent(auth_app, auth_client, fake_sender, auth_config):
-    _register(auth_client, fake_sender, "alice@example.com")
-    created = auth_client.post("/api/workspace/applications", json={"name": "迁移助手"}).json()["application"]
-
-    run_migrations(auth_config.celery_result_db_path, auth_app.state.logger)
-    run_migrations(auth_config.celery_result_db_path, auth_app.state.logger)
-
-    from src.infrastructure.persistence.workspace_migrations import verify_migration
-
-    assert verify_migration(auth_config.celery_result_db_path) == []
-    detail = auth_client.get(f"/api/workspace/applications/{created['application_id']}").json()["application"]
-    assert detail["name"] == "迁移助手"

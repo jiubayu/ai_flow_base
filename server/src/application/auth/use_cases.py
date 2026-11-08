@@ -109,7 +109,7 @@ class AuthUseCase:
         if self.logger is not None:
             self.logger.debug(f"认证审计：{event_type.value} [{outcome_code}] {message}")
 
-    def _issue_session(
+    def _build_session(
         self, user: UserAccount, client_scope: str, now: datetime, rotated_from_id: str | None = None
     ) -> tuple[AuthSession, RefreshGrant]:
         grant_id = secrets.token_urlsafe(32)
@@ -130,6 +130,12 @@ class AuthUseCase:
             issued_at=now,
             expires_at=now + timedelta(seconds=self.access_ttl_seconds),
         )
+        return session, grant
+
+    def _issue_session(
+        self, user: UserAccount, client_scope: str, now: datetime, rotated_from_id: str | None = None
+    ) -> tuple[AuthSession, RefreshGrant]:
+        session, grant = self._build_session(user, client_scope, now, rotated_from_id)
         self.repo.save_grant(grant)
         self.repo.save_session(session)
         return session, grant
@@ -395,12 +401,10 @@ class AuthUseCase:
         old_session = self.repo.get_session_by_grant(grant.refresh_grant_id)
         if old_session is not None and old_session.state.value == "active":
             old_session.replace(now)
-            self.repo.save_session(old_session)
 
-        grant.rotate_to(secrets.token_urlsafe(32), now)
-        self.repo.save_grant(grant)
-
-        session, new_grant = self._issue_session(user, grant.client_scope, now, rotated_from_id=grant.refresh_grant_id)
+        session, new_grant = self._build_session(user, grant.client_scope, now, rotated_from_id=grant.refresh_grant_id)
+        grant.rotate_to(new_grant.refresh_grant_id, now)
+        self.repo.rotate_session(grant, old_session, new_grant, session)
         self._audit(
             AuditEventType.REFRESH_SUCCEEDED,
             outcome_code="accepted",

@@ -40,6 +40,14 @@ class AuthRepository(Protocol):
 
     def get_grant(self, grant_id: str) -> RefreshGrant | None: ...
 
+    def rotate_session(
+        self,
+        old_grant: RefreshGrant,
+        old_session: AuthSession | None,
+        new_grant: RefreshGrant,
+        new_session: AuthSession,
+    ) -> None: ...
+
     def record_audit(self, event: AuthAuditEvent) -> None: ...
 
 

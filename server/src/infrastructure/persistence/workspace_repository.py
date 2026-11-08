@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
-from datetime import datetime
-from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import func, select
 
 from src.application.workspace.ports import WorkspaceMemberView, WorkspaceUnitOfWork
 from src.domain.auth.entities import UserAccount
@@ -19,392 +17,309 @@ from src.domain.workspace.entities import (
 from src.domain.workspace.value_objects import (
     ApplicationStatus,
     MembershipStatus,
-    WorkspaceEventType,
     WorkspaceRole,
     WorkspaceStatus,
 )
-from src.infrastructure.persistence.workspace_migrations import run_migrations
+from src.infrastructure.persistence.models import (
+    UserAccountModel,
+    UserWorkspacePreferenceModel,
+    WorkspaceApplicationModel,
+    WorkspaceAuditEventModel,
+    WorkspaceMembershipModel,
+    WorkspaceModel,
+)
 
 
-def _iso(dt: datetime | None) -> str | None:
-    return dt.isoformat() if dt is not None else None
-
-
-def _parse(value: str | None) -> datetime | None:
-    return datetime.fromisoformat(value) if value else None
-
-
-class SqlUnitOfWork(WorkspaceUnitOfWork):
+class PostgresUnitOfWork(WorkspaceUnitOfWork):
     """注册相关写入的原子边界：用户、工作空间、成员关系与偏好必须一起提交或一起回滚。"""
 
-    def __init__(self, conn) -> None:
-        self.conn = conn
+    def __init__(self, session) -> None:
+        self._session = session
 
     def save_user(self, user: UserAccount) -> None:
-        self.conn.execute(
-            text(
-                "INSERT INTO user_accounts (user_id, email, username, email_verified_at, password_hash, "
-                "password_hash_version, password_updated_at, created_at, updated_at, last_login_at) "
-                "VALUES (:user_id, :email, :username, :email_verified_at, :password_hash, :password_hash_version, "
-                ":password_updated_at, :created_at, :updated_at, :last_login_at) "
-                "ON CONFLICT (user_id) DO UPDATE SET username = excluded.username, updated_at = excluded.updated_at"
-            ),
-            {
-                "user_id": user.user_id,
-                "email": user.email,
-                "username": user.username,
-                "email_verified_at": _iso(user.email_verified_at),
-                "password_hash": user.password_hash,
-                "password_hash_version": user.password_hash_version,
-                "password_updated_at": _iso(user.password_updated_at),
-                "created_at": _iso(user.created_at),
-                "updated_at": _iso(user.updated_at),
-                "last_login_at": _iso(user.last_login_at),
-            },
-        )
+        self._session.merge(_user_model(user))
 
     def save_workspace(self, workspace: Workspace) -> None:
-        self.conn.execute(
-            text(
-                "INSERT INTO workspaces (workspace_id, name, created_by_user_id, created_at, updated_at, status) "
-                "VALUES (:workspace_id, :name, :created_by_user_id, :created_at, :updated_at, :status) "
-                "ON CONFLICT (workspace_id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at"
-            ),
-            {
-                "workspace_id": workspace.workspace_id,
-                "name": workspace.name,
-                "created_by_user_id": workspace.created_by_user_id,
-                "created_at": _iso(workspace.created_at),
-                "updated_at": _iso(workspace.updated_at),
-                "status": workspace.status.value,
-            },
-        )
+        self._session.merge(_workspace_model(workspace))
 
     def save_membership(self, membership: WorkspaceMembership) -> None:
-        self.conn.execute(
-            text(
-                "INSERT INTO workspace_memberships (membership_id, workspace_id, user_id, role, status, joined_at, "
-                "removed_at, created_by_user_id, created_at, updated_at) "
-                "VALUES (:membership_id, :workspace_id, :user_id, :role, :status, :joined_at, :removed_at, "
-                ":created_by_user_id, :created_at, :updated_at) "
-                "ON CONFLICT (membership_id) DO UPDATE SET role = excluded.role, status = excluded.status, "
-                "removed_at = excluded.removed_at, updated_at = excluded.updated_at"
-            ),
-            {
-                "membership_id": membership.membership_id,
-                "workspace_id": membership.workspace_id,
-                "user_id": membership.user_id,
-                "role": membership.role.value,
-                "status": membership.status.value,
-                "joined_at": _iso(membership.joined_at),
-                "removed_at": _iso(membership.removed_at),
-                "created_by_user_id": membership.created_by_user_id,
-                "created_at": _iso(membership.created_at),
-                "updated_at": _iso(membership.updated_at),
-            },
-        )
+        self._session.merge(_membership_model(membership))
 
     def save_preference(self, preference: UserWorkspacePreference) -> None:
-        self.conn.execute(
-            text(
-                "INSERT INTO user_workspace_preferences (user_id, last_workspace_id, updated_at) "
-                "VALUES (:user_id, :last_workspace_id, :updated_at) "
-                "ON CONFLICT (user_id) DO UPDATE SET last_workspace_id = excluded.last_workspace_id, "
-                "updated_at = excluded.updated_at"
-            ),
-            {
-                "user_id": preference.user_id,
-                "last_workspace_id": preference.last_workspace_id,
-                "updated_at": _iso(preference.updated_at),
-            },
-        )
+        self._session.merge(_preference_model(preference))
 
     def save_application(self, application: WorkspaceApplication) -> None:
-        self.conn.execute(_APPLICATION_UPSERT, _application_params(application))
+        self._session.merge(_application_model(application))
 
     def record_audit(self, event: WorkspaceAuditEvent) -> None:
-        # 审计必须写在同一个事务边界内：另开一条连接会在当前事务持有写锁时触发 database is locked。
-        self.conn.execute(_AUDIT_INSERT, _audit_params(event))
+        # 审计必须写在同一个事务边界内：另开一条连接会在当前事务持有写锁时阻塞。
+        self._session.add(_audit_model(event))
 
 
-_APPLICATION_UPSERT = text(
-    "INSERT INTO workspace_applications (application_id, workspace_id, owner_user_id, name, description, "
-    "status, created_at, updated_at) "
-    "VALUES (:application_id, :workspace_id, :owner_user_id, :name, :description, :status, :created_at, :updated_at) "
-    "ON CONFLICT (application_id) DO UPDATE SET name = excluded.name, description = excluded.description, "
-    "status = excluded.status, updated_at = excluded.updated_at"
-)
-
-
-def _application_params(application: WorkspaceApplication) -> dict:
-    return {
-        "application_id": application.application_id,
-        "workspace_id": application.workspace_id,
-        "owner_user_id": application.owner_user_id,
-        "name": application.name,
-        "description": application.description,
-        "status": application.status.value,
-        "created_at": _iso(application.created_at),
-        "updated_at": _iso(application.updated_at),
-    }
-
-
-_AUDIT_INSERT = text(
-    "INSERT INTO workspace_audit_events (event_id, event_type, workspace_id, actor_user_id, "
-    "target_user_id, outcome_code, message, occurred_at) "
-    "VALUES (:event_id, :event_type, :workspace_id, :actor_user_id, :target_user_id, "
-    ":outcome_code, :message, :occurred_at)"
-)
-
-
-def _audit_params(event: WorkspaceAuditEvent) -> dict:
-    return {
-        "event_id": event.event_id,
-        "event_type": event.event_type.value,
-        "workspace_id": event.workspace_id,
-        "actor_user_id": event.actor_user_id,
-        "target_user_id": event.target_user_id,
-        "outcome_code": event.outcome_code,
-        "message": event.message,
-        "occurred_at": _iso(event.occurred_at),
-    }
-
-
-class SqlWorkspaceRepository:
-    def __init__(self, engine, db_path: Path, logger: logging.Logger | None = None) -> None:
-        self.engine = engine
-        self.db_path = db_path
+class PostgresWorkspaceRepository:
+    def __init__(self, session_factory, logger: logging.Logger | None = None) -> None:
+        self._session_factory = session_factory
         self.logger = logger
-        run_migrations(db_path, logger)
 
     @contextmanager
     def unit_of_work(self):
-        conn = self.engine.connect()
-        try:
-            yield SqlUnitOfWork(conn)
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        with self._session_factory.begin() as session:
+            yield PostgresUnitOfWork(session)
 
     def get_workspace(self, workspace_id: str) -> Workspace | None:
-        with self.engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT * FROM workspaces WHERE workspace_id = :workspace_id"),
-                {"workspace_id": workspace_id},
-            ).fetchone()
-            return self._to_workspace(row) if row else None
+        with self._session_factory() as session:
+            record = session.scalar(select(WorkspaceModel).where(WorkspaceModel.workspace_id == workspace_id))
+            return self._to_workspace(record) if record else None
 
     def get_active_membership(self, workspace_id: str, user_id: str) -> WorkspaceMembership | None:
-        with self.engine.connect() as conn:
-            row = conn.execute(
-                text(
-                    "SELECT * FROM workspace_memberships "
-                    "WHERE workspace_id = :workspace_id AND user_id = :user_id AND status = 'active'"
-                ),
-                {"workspace_id": workspace_id, "user_id": user_id},
-            ).fetchone()
-            return self._to_membership(row) if row else None
+        with self._session_factory() as session:
+            record = session.scalar(
+                select(WorkspaceMembershipModel)
+                .where(
+                    WorkspaceMembershipModel.workspace_id == workspace_id,
+                    WorkspaceMembershipModel.user_id == user_id,
+                    WorkspaceMembershipModel.status == MembershipStatus.ACTIVE.value,
+                )
+            )
+            return self._to_membership(record) if record else None
 
     def list_active_memberships_for_user(self, user_id: str) -> list[WorkspaceMembership]:
-        with self.engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    "SELECT * FROM workspace_memberships WHERE user_id = :user_id AND status = 'active' "
-                    "ORDER BY joined_at"
-                ),
-                {"user_id": user_id},
-            ).fetchall()
-            return [self._to_membership(row) for row in rows]
+        with self._session_factory() as session:
+            records = session.scalars(
+                select(WorkspaceMembershipModel)
+                .where(
+                    WorkspaceMembershipModel.user_id == user_id,
+                    WorkspaceMembershipModel.status == MembershipStatus.ACTIVE.value,
+                )
+                .order_by(WorkspaceMembershipModel.joined_at)
+            ).all()
+            return [self._to_membership(record) for record in records]
 
     def list_active_members(self, workspace_id: str) -> list[WorkspaceMemberView]:
-        with self.engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    "SELECT m.user_id, u.username, m.role, m.joined_at FROM workspace_memberships m "
-                    "JOIN user_accounts u ON u.user_id = m.user_id "
-                    "WHERE m.workspace_id = :workspace_id AND m.status = 'active' ORDER BY m.joined_at"
-                ),
-                {"workspace_id": workspace_id},
-            ).fetchall()
+        with self._session_factory() as session:
+            rows = session.execute(
+                select(
+                    WorkspaceMembershipModel.user_id,
+                    UserAccountModel.username,
+                    WorkspaceMembershipModel.role,
+                    WorkspaceMembershipModel.joined_at,
+                )
+                .join(UserAccountModel, UserAccountModel.user_id == WorkspaceMembershipModel.user_id)
+                .where(
+                    WorkspaceMembershipModel.workspace_id == workspace_id,
+                    WorkspaceMembershipModel.status == MembershipStatus.ACTIVE.value,
+                )
+                .order_by(WorkspaceMembershipModel.joined_at)
+            ).all()
             return [
                 WorkspaceMemberView(
                     user_id=row[0],
                     username=row[1],
                     role=row[2],
-                    joined_at=_parse(row[3]),
+                    joined_at=row[3],
                 )
                 for row in rows
             ]
 
     def save_membership(self, membership: WorkspaceMembership) -> None:
-        with self.engine.begin() as conn:
-            conn.execute(
-                text(
-                    "INSERT INTO workspace_memberships (membership_id, workspace_id, user_id, role, status, joined_at, "
-                    "removed_at, created_by_user_id, created_at, updated_at) "
-                    "VALUES (:membership_id, :workspace_id, :user_id, :role, :status, :joined_at, :removed_at, "
-                    ":created_by_user_id, :created_at, :updated_at) "
-                    "ON CONFLICT (membership_id) DO UPDATE SET role = excluded.role, status = excluded.status, "
-                    "removed_at = excluded.removed_at, updated_at = excluded.updated_at"
-                ),
-                {
-                    "membership_id": membership.membership_id,
-                    "workspace_id": membership.workspace_id,
-                    "user_id": membership.user_id,
-                    "role": membership.role.value,
-                    "status": membership.status.value,
-                    "joined_at": _iso(membership.joined_at),
-                    "removed_at": _iso(membership.removed_at),
-                    "created_by_user_id": membership.created_by_user_id,
-                    "created_at": _iso(membership.created_at),
-                    "updated_at": _iso(membership.updated_at),
-                },
-            )
+        with self._session_factory.begin() as session:
+            session.merge(_membership_model(membership))
 
     def get_user_by_id(self, user_id: str) -> UserAccount | None:
-        with self.engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT * FROM user_accounts WHERE user_id = :user_id"),
-                {"user_id": user_id},
-            ).mappings().fetchone()
-            return self._to_user(row) if row else None
+        with self._session_factory() as session:
+            record = session.get(UserAccountModel, user_id)
+            return self._to_user(record) if record else None
 
     def count_active_managers(self, workspace_id: str) -> int:
-        with self.engine.connect() as conn:
-            return conn.execute(
-                text(
-                    "SELECT COUNT(*) FROM workspace_memberships "
-                    "WHERE workspace_id = :workspace_id AND status = 'active' AND role = 'manager'"
-                ),
-                {"workspace_id": workspace_id},
-            ).fetchone()[0]
+        with self._session_factory() as session:
+            return session.scalar(
+                select(func.count())
+                .select_from(WorkspaceMembershipModel)
+                .where(
+                    WorkspaceMembershipModel.workspace_id == workspace_id,
+                    WorkspaceMembershipModel.status == MembershipStatus.ACTIVE.value,
+                    WorkspaceMembershipModel.role == WorkspaceRole.MANAGER.value,
+                )
+            )
 
     def find_user_by_username(self, username: str) -> UserAccount | None:
-        with self.engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT * FROM user_accounts WHERE username = :username"),
-                {"username": username},
-            ).mappings().fetchone()
-            return self._to_user(row) if row else None
+        with self._session_factory() as session:
+            record = session.scalar(select(UserAccountModel).where(UserAccountModel.username == username))
+            return self._to_user(record) if record else None
 
     def get_preference(self, user_id: str) -> UserWorkspacePreference | None:
-        with self.engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT * FROM user_workspace_preferences WHERE user_id = :user_id"),
-                {"user_id": user_id},
-            ).fetchone()
+        with self._session_factory() as session:
+            record = session.scalar(
+                select(UserWorkspacePreferenceModel).where(UserWorkspacePreferenceModel.user_id == user_id)
+            )
             return (
                 UserWorkspacePreference(
-                    user_id=row[0], last_workspace_id=row[1], updated_at=_parse(row[2])
+                    user_id=record.user_id,
+                    last_workspace_id=record.last_workspace_id,
+                    updated_at=record.updated_at,
                 )
-                if row
+                if record
                 else None
             )
 
     def save_preference(self, preference: UserWorkspacePreference) -> None:
-        with self.engine.begin() as conn:
-            conn.execute(
-                text(
-                    "INSERT INTO user_workspace_preferences (user_id, last_workspace_id, updated_at) "
-                    "VALUES (:user_id, :last_workspace_id, :updated_at) "
-                    "ON CONFLICT (user_id) DO UPDATE SET last_workspace_id = excluded.last_workspace_id, "
-                    "updated_at = excluded.updated_at"
-                ),
-                {
-                    "user_id": preference.user_id,
-                    "last_workspace_id": preference.last_workspace_id,
-                    "updated_at": _iso(preference.updated_at),
-                },
-            )
+        with self._session_factory.begin() as session:
+            session.merge(_preference_model(preference))
 
     def record_audit(self, event: WorkspaceAuditEvent) -> None:
-        # 不在事务内调用（例如认证失败）时只能自己开一条连接；在事务内则走 SqlUnitOfWork.record_audit。
-        with self.engine.begin() as conn:
-            conn.execute(_AUDIT_INSERT, _audit_params(event))
+        # 不在事务内调用（例如认证失败）时只能自己开一条连接；在事务内则走 PostgresUnitOfWork.record_audit。
+        with self._session_factory.begin() as session:
+            session.add(_audit_model(event))
 
     def list_applications(self, workspace_id: str) -> list[WorkspaceApplication]:
-        with self.engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    "SELECT * FROM workspace_applications WHERE workspace_id = :workspace_id "
-                    "ORDER BY updated_at DESC, application_id"
-                ),
-                {"workspace_id": workspace_id},
-            ).mappings().fetchall()
-            return [self._to_application(row) for row in rows]
+        with self._session_factory() as session:
+            records = session.scalars(
+                select(WorkspaceApplicationModel)
+                .where(WorkspaceApplicationModel.workspace_id == workspace_id)
+                .order_by(WorkspaceApplicationModel.updated_at.desc(), WorkspaceApplicationModel.application_id)
+            ).all()
+            return [self._to_application(record) for record in records]
 
     def get_application(self, application_id: str) -> WorkspaceApplication | None:
-        with self.engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT * FROM workspace_applications WHERE application_id = :application_id"),
-                {"application_id": application_id},
-            ).mappings().fetchone()
-            return self._to_application(row) if row else None
+        with self._session_factory() as session:
+            record = session.scalar(
+                select(WorkspaceApplicationModel).where(WorkspaceApplicationModel.application_id == application_id)
+            )
+            return self._to_application(record) if record else None
 
     def find_application_by_name(self, workspace_id: str, name: str) -> WorkspaceApplication | None:
-        with self.engine.connect() as conn:
-            row = conn.execute(
-                text(
-                    "SELECT * FROM workspace_applications "
-                    "WHERE workspace_id = :workspace_id AND name = :name"
-                ),
-                {"workspace_id": workspace_id, "name": name},
-            ).mappings().fetchone()
-            return self._to_application(row) if row else None
+        with self._session_factory() as session:
+            record = session.scalar(
+                select(WorkspaceApplicationModel)
+                .where(WorkspaceApplicationModel.workspace_id == workspace_id, WorkspaceApplicationModel.name == name)
+            )
+            return self._to_application(record) if record else None
 
     def save_application(self, application: WorkspaceApplication) -> None:
-        with self.engine.begin() as conn:
-            conn.execute(_APPLICATION_UPSERT, _application_params(application))
+        with self._session_factory.begin() as session:
+            session.merge(_application_model(application))
 
-    def _to_application(self, row) -> WorkspaceApplication:
+    def _to_application(self, record: WorkspaceApplicationModel) -> WorkspaceApplication:
         return WorkspaceApplication(
-            application_id=row["application_id"],
-            workspace_id=row["workspace_id"],
-            owner_user_id=row["owner_user_id"],
-            name=row["name"],
-            description=row["description"],
-            created_at=_parse(row["created_at"]),
-            updated_at=_parse(row["updated_at"]),
-            status=ApplicationStatus(row["status"]),
+            application_id=record.application_id,
+            workspace_id=record.workspace_id,
+            owner_user_id=record.owner_user_id,
+            name=record.name,
+            description=record.description,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            status=ApplicationStatus(record.status),
         )
 
-    def _to_workspace(self, row) -> Workspace:
+    def _to_workspace(self, record: WorkspaceModel) -> Workspace:
         return Workspace(
-            workspace_id=row[0],
-            name=row[1],
-            created_by_user_id=row[2],
-            created_at=_parse(row[3]),
-            updated_at=_parse(row[4]),
-            status=WorkspaceStatus(row[5]),
+            workspace_id=record.workspace_id,
+            name=record.name,
+            created_by_user_id=record.created_by_user_id,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            status=WorkspaceStatus(record.status),
         )
 
-    def _to_membership(self, row) -> WorkspaceMembership:
+    def _to_membership(self, record: WorkspaceMembershipModel) -> WorkspaceMembership:
         return WorkspaceMembership(
-            membership_id=row[0],
-            workspace_id=row[1],
-            user_id=row[2],
-            role=WorkspaceRole(row[3]),
-            status=MembershipStatus(row[4]),
-            joined_at=_parse(row[5]),
-            removed_at=_parse(row[6]),
-            created_by_user_id=row[7],
-            created_at=_parse(row[8]),
-            updated_at=_parse(row[9]),
+            membership_id=record.membership_id,
+            workspace_id=record.workspace_id,
+            user_id=record.user_id,
+            role=WorkspaceRole(record.role),
+            status=MembershipStatus(record.status),
+            joined_at=record.joined_at,
+            removed_at=record.removed_at,
+            created_by_user_id=record.created_by_user_id,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
         )
 
-    def _to_user(self, row) -> UserAccount:
+    def _to_user(self, record: UserAccountModel) -> UserAccount:
         return UserAccount(
-            user_id=row["user_id"],
-            email=row["email"],
-            username=row["username"],
-            password_hash=row["password_hash"],
-            password_hash_version=row["password_hash_version"],
-            created_at=_parse(row["created_at"]),
-            updated_at=_parse(row["updated_at"]),
-            email_verified_at=_parse(row["email_verified_at"]),
-            password_updated_at=_parse(row["password_updated_at"]),
-            last_login_at=_parse(row["last_login_at"]),
+            user_id=record.user_id,
+            email=record.email,
+            username=record.username,
+            password_hash=record.password_hash,
+            password_hash_version=record.password_hash_version,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            email_verified_at=record.email_verified_at,
+            password_updated_at=record.password_updated_at,
+            last_login_at=record.last_login_at,
         )
+
+
+def _user_model(user: UserAccount) -> UserAccountModel:
+    return UserAccountModel(
+        user_id=user.user_id,
+        email=user.email,
+        username=user.username,
+        email_verified_at=user.email_verified_at,
+        password_hash=user.password_hash,
+        password_hash_version=user.password_hash_version,
+        password_updated_at=user.password_updated_at,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        last_login_at=user.last_login_at,
+    )
+
+
+def _workspace_model(workspace: Workspace) -> WorkspaceModel:
+    return WorkspaceModel(
+        workspace_id=workspace.workspace_id,
+        name=workspace.name,
+        created_by_user_id=workspace.created_by_user_id,
+        created_at=workspace.created_at,
+        updated_at=workspace.updated_at,
+        status=workspace.status.value,
+    )
+
+
+def _membership_model(membership: WorkspaceMembership) -> WorkspaceMembershipModel:
+    return WorkspaceMembershipModel(
+        membership_id=membership.membership_id,
+        workspace_id=membership.workspace_id,
+        user_id=membership.user_id,
+        role=membership.role.value,
+        status=membership.status.value,
+        joined_at=membership.joined_at,
+        removed_at=membership.removed_at,
+        created_by_user_id=membership.created_by_user_id,
+        created_at=membership.created_at,
+        updated_at=membership.updated_at,
+    )
+
+
+def _preference_model(preference: UserWorkspacePreference) -> UserWorkspacePreferenceModel:
+    return UserWorkspacePreferenceModel(
+        user_id=preference.user_id,
+        last_workspace_id=preference.last_workspace_id,
+        updated_at=preference.updated_at,
+    )
+
+
+def _application_model(application: WorkspaceApplication) -> WorkspaceApplicationModel:
+    return WorkspaceApplicationModel(
+        application_id=application.application_id,
+        workspace_id=application.workspace_id,
+        owner_user_id=application.owner_user_id,
+        name=application.name,
+        description=application.description,
+        status=application.status.value,
+        created_at=application.created_at,
+        updated_at=application.updated_at,
+    )
+
+
+def _audit_model(event: WorkspaceAuditEvent) -> WorkspaceAuditEventModel:
+    return WorkspaceAuditEventModel(
+        event_id=event.event_id,
+        event_type=event.event_type.value,
+        workspace_id=event.workspace_id,
+        actor_user_id=event.actor_user_id,
+        target_user_id=event.target_user_id,
+        outcome_code=event.outcome_code,
+        message=event.message,
+        occurred_at=event.occurred_at,
+    )

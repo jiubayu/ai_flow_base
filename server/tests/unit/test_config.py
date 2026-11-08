@@ -63,3 +63,8 @@ def test_load_config_uses_database_url(tmp_path):
     config = load_config(env)
 
     assert config.database_url == "postgresql+psycopg://user:pass@localhost:5432/ai_flow_test"
+
+def test_config_no_longer_exposes_result_db_path(tmp_path):
+    config = load_config(full_env(tmp_path))
+
+    assert not hasattr(config, "celery_result_db_path")

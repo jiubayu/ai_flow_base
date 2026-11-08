@@ -59,7 +59,6 @@ class DevctlHarness:
             "RUNTIME_DIR=.runtime\n"
             "CELERY_BROKER_URL=filesystem://\n"
             "CELERY_BROKER_DIR=.runtime/celery-queue\n"
-            "CELERY_RESULT_DB_PATH=.runtime/celery_results.db\n"
             f"FRONTEND_PORT={self.frontend_port}\n"
         )
 

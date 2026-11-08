@@ -98,6 +98,7 @@ def create_app(
 
     logger = configure_logging(FileLogger(config.log_dir / "backend.log"), "backend", config.debug)
     app.state.logger = logger
+    logger.info("database.postgres.initialized pgvector=enabled")
     logger.info(f"后端服务启动：http://{config.backend_host}:{config.backend_port}")
 
     auth_use_case, workspace_use_case = build_services(

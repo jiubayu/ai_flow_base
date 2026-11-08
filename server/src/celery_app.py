@@ -10,7 +10,7 @@ def create_celery_app(config: Config) -> Celery:
     ensure_broker_dir(config.celery_broker_dir)
     celery = Celery("bootstrap")
     celery.conf.broker_url = config.celery_broker_url
-    celery.conf.result_backend = f"db+sqlite:///{config.celery_result_db_path}"
+    celery.conf.result_backend = f"db+{config.database_url}"
     celery.conf.broker_transport_options = transport_options(config.celery_broker_dir)
     return celery
 
